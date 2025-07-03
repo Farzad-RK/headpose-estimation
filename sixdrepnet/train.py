@@ -1,29 +1,19 @@
-import time
-import math
-import re
-import sys
-import os
 import argparse
+import os
+import time
 
-import numpy as np
-from numpy.lib.function_base import _quantile_unchecked
 import cv2
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
+import torchvision
 from torch.backends import cudnn
 from torch.utils import model_zoo
-import torchvision
+from torch.utils.data import DataLoader
 from torchvision import transforms
-import matplotlib
-from matplotlib import pyplot as plt
-from PIL import Image
-matplotlib.use('TkAgg')
 
-from model import SixDRepNet, SixDRepNet2
 import datasets
+from backbone.repnext import repnext_m4
 from loss import GeodesicLoss
+from model import SixDRepNet, SixDRepNet_RepNeXt
 
 
 def parse_args():
@@ -46,23 +36,28 @@ def parse_args():
     parser.add_argument('--scheduler', default=False, type=lambda x: (str(x).lower() == 'true'))
     parser.add_argument(
         '--dataset', dest='dataset', help='Dataset type.',
-        default='Pose_300W_LP', type=str) #Pose_300W_LP
+        default='Pose_300W_LP', type=str)  # Pose_300W_LP
     parser.add_argument(
         '--data_dir', dest='data_dir', help='Directory path for data.',
-        default='datasets/300W_LP', type=str)#BIWI_70_30_train.npz
+        default='datasets/300W_LP', type=str)  # BIWI_70_30_train.npz
     parser.add_argument(
         '--filename_list', dest='filename_list',
         help='Path to text file containing relative paths for every example.',
-        default='datasets/300W_LP/files.txt', type=str) #BIWI_70_30_train.npz #300W_LP/files.txt
+        default='datasets/300W_LP/files.txt', type=str)  # BIWI_70_30_train.npz #300W_LP/files.txt
     parser.add_argument(
         '--output_string', dest='output_string',
         help='String appended to output snapshots.', default='', type=str)
     parser.add_argument(
         '--snapshot', dest='snapshot', help='Path of model snapshot.',
         default='', type=str)
+    parser.add_argument('--backbone_type', type=str, default='repvgg', choices=['repvgg', 'repnext'],
+                        help='Type of backbone to use: repvgg or repnext')
+    parser.add_argument('--backbone_weights', type=str, default='RepVGG-B1g2-train.pth',
+                        help='Path to the backbone weights file (.pth for repvgg, .pt for repnext)')
 
     args = parser.parse_args()
     return args
+
 
 def load_filtered_state_dict(model, snapshot):
     # By user apaszke from discuss.pytorch.org
@@ -90,11 +85,19 @@ if __name__ == '__main__':
     if not os.path.exists('output/snapshots/{}'.format(summary_name)):
         os.makedirs('output/snapshots/{}'.format(summary_name))
 
-    model = SixDRepNet(backbone_name='RepVGG-B1g2',
-                        backbone_file='RepVGG-B1g2-train.pth',
-                        deploy=False,
-                        pretrained=True)
- 
+    if args.backbone_type == 'repvgg':
+        model = SixDRepNet(backbone_name='RepVGG-B1g2',
+                           backbone_file=args.backbone_weights,
+                           deploy=False,
+                           pretrained=True)
+    elif args.backbone_type == 'repnext':
+        model = SixDRepNet_RepNeXt(backbone_fn=repnext_m4, pretrained=False, deploy=True)
+        model = model.cuda(args.gpu_id)
+        jit_model = torch.jit.load(args.backbone_weights, map_location=f"cuda:{args.gpu_id}")
+        state_dict = jit_model.state_dict()
+        model.backbone.load_state_dict(state_dict, strict=False)
+    else:
+        raise ValueError("Unsupported backbone_type: {}".format(args.backbone_type))
     if not args.snapshot == '':
         saved_state_dict = torch.load(args.snapshot)
         model.load_state_dict(saved_state_dict['model_state_dict'])
@@ -105,7 +108,7 @@ if __name__ == '__main__':
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225])
 
-    transformations = transforms.Compose([transforms.RandomResizedCrop(size=224,scale=(0.8,1)),
+    transformations = transforms.Compose([transforms.RandomResizedCrop(size=224, scale=(0.8, 1)),
                                           transforms.ToTensor(),
                                           normalize])
 
@@ -119,11 +122,10 @@ if __name__ == '__main__':
         num_workers=4)
 
     model.cuda(gpu)
-    crit = GeodesicLoss().cuda(gpu) #torch.nn.MSELoss().cuda(gpu)
+    crit = GeodesicLoss().cuda(gpu)  # torch.nn.MSELoss().cuda(gpu)
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
 
-
-    #milestones = np.arange(num_epochs)
+    # milestones = np.arange(num_epochs)
     milestones = [10, 20]
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=milestones, gamma=0.5)
@@ -148,17 +150,17 @@ if __name__ == '__main__':
 
             loss_sum += loss.item()
 
-            if (i+1) % 100 == 0:
+            if (i + 1) % 100 == 0:
                 print('Epoch [%d/%d], Iter [%d/%d] Loss: '
                       '%.6f' % (
-                          epoch+1,
+                          epoch + 1,
                           num_epochs,
-                          i+1,
-                          len(pose_dataset)//batch_size,
+                          i + 1,
+                          len(pose_dataset) // batch_size,
                           loss.item(),
                       )
                       )
-        
+
         if b_scheduler:
             scheduler.step()
 
@@ -170,5 +172,5 @@ if __name__ == '__main__':
                       'model_state_dict': model.state_dict(),
                       'optimizer_state_dict': optimizer.state_dict(),
                   }, 'output/snapshots/' + summary_name + '/' + args.output_string +
-                      '_epoch_' + str(epoch+1) + '.tar')
+                     '_epoch_' + str(epoch + 1) + '.tar')
                   )

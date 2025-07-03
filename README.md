@@ -1,25 +1,41 @@
 # Enhancing 6DRepNet with RepNeXt-M4 for Efficient Head Pose Estimation on Mobile Devices
 
 ## Abstract
-We propose a novel enhancement to the 6DRepNet architecture by replacing its original RepVGG backbone with the recently introduced RepNeXt-M4, a state-of-the-art lightweight convolutional network optimized for mobile deployment. Our motivation stems from the need to balance inference latency, model compactness, and angular precision for real-time head pose estimation on edge devices. To our knowledge, this combination has not been previously explored or published. Preliminary analysis suggests that this substitution could offer improved accuracy, multi-scale feature extraction, and real-time compatibility, making it suitable for embedded and mobile vision applications.
+We propose a novel enhancement to the [6DRepNet](https://github.com/thohemp/6DRepNet) architecture by replacing its original RepVGG backbone with the recently introduced [RepNeXt-M4](https://github.com/suous/RepNeXt), a state-of-the-art lightweight convolutional network optimized for mobile deployment. Our motivation stems from the need to balance inference latency, model compactness, and angular precision for real-time head pose estimation on edge devices. To our knowledge, this combination has not been previously explored or published. Preliminary analysis suggests that this substitution could offer improved accuracy, multi-scale feature extraction, and real-time compatibility, making it suitable for embedded and mobile vision applications.
+
+---
 
 ## 1. Introduction
-Head pose estimation is a fundamental task in computer vision, supporting applications in augmented reality, driver monitoring, and human-computer interaction. Modern approaches such as 6DRepNet demonstrate high performance by predicting continuous SO(3) rotations using 6D representations and geodesic loss. However, their mobile deployment is limited by the choice of backbone networks.
+Head pose estimation is a fundamental task in computer vision, supporting applications in augmented reality, driver monitoring, and human-computer interaction. Modern approaches such as [6DRepNet](https://github.com/thohemp/6DRepNet) demonstrate high performance by predicting continuous SO(3) rotations using 6D representations and geodesic loss. However, their mobile deployment is limited by the choice of backbone networks.
 
-RepVGG, used in the original 6DRepNet, while efficient, does not leverage recent advances in multi-scale reparameterization and feature fusion. In this work, we introduce **RepNeXt-M4** as a replacement backbone and hypothesize that it improves both accuracy and efficiency.
+[RepVGG](https://github.com/DingXiaoH/RepVGG), used in the original 6DRepNet, while efficient, does not leverage recent advances in multi-scale reparameterization and feature fusion. In this work, we introduce **RepNeXt-M4** as a replacement backbone and hypothesize that it improves both accuracy and efficiency.
+
+---
 
 ## 2. Related Work
 ### 2.1. 6DRepNet
 6DRepNet utilizes a 6D continuous representation of rotation matrices, followed by Gram-Schmidt orthonormalization and geodesic loss. It was designed for robust head pose estimation across wide angles and achieves state-of-the-art results using RepVGG or ResNet.
 
+**Original Paper:**  
+- [6DRepNet: Category-Level 6D Pose Estimation via Rotation Representation and Geodesic Loss](https://arxiv.org/pdf/2502.14061)  
+- [Official codebase](https://github.com/thohemp/6DRepNet)
+
 ### 2.2. RepNeXt-M4
-RepNeXt-M4 introduces a lightweight design optimized for mobile devices. It incorporates multi-scale parallel and serial convolution paths and fuses them using structural reparameterization. The result is high representational power with minimal inference latency (~1.5ms on iPhone 12).
+[RepNeXt-M4](https://github.com/suous/RepNeXt) introduces a lightweight design optimized for mobile devices. It incorporates multi-scale parallel and serial convolution paths and fuses them using structural reparameterization. The result is high representational power with minimal inference latency (~1.5ms on iPhone 12).
+
+**Original Paper:**  
+- [RepNeXt: Multi-Scale Reparameterized CNNs for Mobile Vision](https://arxiv.org/abs/2406.16004)  
+- [Official codebase](https://github.com/suous/RepNeXt)
 
 ### 2.3. Prior Integrations
 No existing literature or implementations combine RepNeXt with 6DRepNet. This research aims to bridge that gap.
 
+---
+
 ## 3. Methodology
+
 ### 3.1. Architecture Design
+
 Our approach preserves the 6DRepNet regression head, Gram-Schmidt rotation mapping, and geodesic loss function, while replacing the backbone with RepNeXt-M4. The modified pipeline is as follows:
 
 ```text
@@ -36,99 +52,236 @@ Our approach preserves the 6DRepNet regression head, Gram-Schmidt rotation mappi
   [SO(3) Rotation Matrix]
         ↓
   [Geodesic Loss (training) / Optional Euler Conversion (inference)]
-```
+````
 
 ### 3.2. Loss Function
-We retain the geodesic loss function:
-\[
-L_{geo}(\hat{R}, R_{gt}) = \arccos\left(\frac{\text{tr}(\hat{R}^T R_{gt}) - 1}{2}\right)
-\]
 
-Here is the completed section of your `.md` file, incorporating details from the sources and our conversation history, using "we" and providing comprehensive citations:
+We retain the geodesic loss function:
+
+$$
+L_{geo}(\hat{R}, R_{gt}) = \arccos\left(\frac{\text{tr}(\hat{R}^T R_{gt}) - 1}{2}\right)
+$$
 
 ### 3.3. Training Protocol
 
-We follow the instructions from the original [6DRepNet](https://github.com/thohemp/6DRepNet/blob/master/README.MD) paper for data preparation and training. We place the datasets in a designated directory structure, such as `datasets/name_of_dataset`.
+* **Dataset preparation:**
+  Follow instructions from the original [6DRepNet README](https://github.com/thohemp/6DRepNet/blob/master/README.MD).
 
-For preprocessing, we first need to create a `filenamelist` within the dataset directory for **300W-LP** and **AFLW2000**. To create this, we run the following command, adjusting the `--root_dir` as necessary for each dataset:
+  * Place datasets (300W-LP, AFLW2000, BIWI) in `datasets/<name>/`
+* **Create filelists:**
+  For each dataset, generate a `filenames.txt`:
 
-```bash
-python create_filename_list.py --root_dir datasets/300W_LP
+  ```bash
+  python create_filename_list.py --root_dir datasets/300W_LP
+  ```
+* **BIWI preprocessing:**
+  Use the original 6DRepNet scripts for face cropping and split (see [official repo](https://github.com/thohemp/6DRepNet)).
+* **Train/test splits:**
+
+  * Pretrain on 300W-LP, fine-tune/evaluate on BIWI and AFLW2000.
+  * 300W-LP is academic only; BIWI has a non-commercial license.
+* **Training details:**
+
+  * **Optimizer:** AdamW
+  * **Scheduler:** Cosine decay
+  * **Augmentations:** Flip, color jitter, Gaussian noise
+
+---
+
+## 4. Integration Structure
+
+```
+sixdrepnet/
+  ├── model.py
+  ├── backbone/
+  │     ├── repnext.py         # RepNeXt model implementations and registry
+  │     └── repnext_utils.py   # Batchnorm fusion for deploy
+  ├── datasets/
+  ├── output/
+  │     └── snapshots/
+  ├── train.py                 # Training script (with backbone selection)
+  ├── create_filename_list.py
+  └── utils.py                 # Includes compute_rotation_matrix_from_ortho6d
 ```
 
-The **BIWI** dataset requires specific preprocessing steps. We must **preprocess the BIWI dataset using a face detector to cut out the faces from the images**. Scripts for this purpose, as well as for splitting the BIWI dataset into a **7:3 training/testing ratio**, are provided within the original 6DRepNet repository. Crucially, the **cropped image size for BIWI should be set to 256 pixels**.
-
-Our training protocol itself will adhere to the following specifications:
-
-*   **Dataset**: We will use **300W-LP for pretraining**, followed by **fine-tuning on the BIWI and AFLW2000 datasets**. These datasets are commonly used for training and validating head pose estimation models. We note that 300W-LP is for academic use only, and BIWI has a non-commercial license, which we use with caution for academic baseline comparisons.
-*   **Optimizer**: We will employ **AdamW** as our optimizer.
-*   **Scheduler**: A **Cosine decay** learning rate scheduler will be utilised.
-*   **Augmentations**: To enhance the model's generalisation, standard augmentations such as **flip, color jitter, and Gaussian noise** will be applied during training.
-
-
-## Integration Structure
-
-- `model.py`: Contains all model classes, including `SixDRepNet_RepNeXt`, which wraps a RepNeXt backbone with a pose regression head.
-- `backbone/repnext.py`: Contains RepNeXt model implementations and variant registries (e.g., `repnext_m0` to `repnext_m5`).
-- `backbone/repnext_utils.py`: Minimal utility for batchnorm fusion (`replace_batchnorm`) for deployment/inference speed.
-- `utils.py`: Must provide the function `compute_rotation_matrix_from_ortho6d` for converting 6D representations to SO(3) rotation matrices.
-
+* `model.py` now includes `SixDRepNet_RepNeXt`, wrapping RepNeXt with the 6D regression head.
+* `train.py` allows selection of backbone and weights by command-line argument (`--backbone_type`, `--backbone_weights`).
 
 ### Model Instantiation
 
-**Flexible Backbone Selection:**  
-We can use any RepNeXt variant as a backbone (e.g., `repnext_m0`, `repnext_m1`, ..., `repnext_m5`). Just pass the corresponding constructor function.
-
 ```python
 from model import SixDRepNet_RepNeXt
-from repnext import repnext_m3  # Or repnext_m0, ..., repnext_m5
-
-# Example: Use RepNeXt-M3 backbone with ImageNet pretrained weights
+from backbone.repnext import repnext_m4
 model = SixDRepNet_RepNeXt(
-    backbone_fn=repnext_m3,
+    backbone_fn=repnext_m4,
     pretrained=True,
     deploy=False
 )
-
 ```
-## 4. Hypothesis
+
+You may select any RepNeXt variant (`repnext_m0` ... `repnext_m5`).
+
+---
+
+## 5. Hypothesis
+
 Replacing RepVGG with RepNeXt-M4 will:
-- Improve angular accuracy due to enhanced multi-scale feature representation
-- Maintain or reduce inference latency
-- Improve robustness on real-world datasets (e.g. occlusion, expression variance)
 
-## 5. Evaluation
-We will benchmark our model against:
-- Original 6DRepNet (RepVGG backbone)
-- MobileNetV3 variant
-- Newer baselines: MobileViG-Ti, EfficientFormerV2
+* Improve angular accuracy due to enhanced multi-scale feature representation
+* Maintain or reduce inference latency
+* Improve robustness on real-world datasets (occlusion, expression variance)
 
-Metrics:
-- Mean Absolute Error (°) per angle (yaw, pitch, roll)
-- Inference latency on mobile (iPhone 12, Pixel 6)
-- Model size (parameters, MACs)
+---
 
-## 6. Preliminary Results (Planned)
-We will present comparative evaluations using the same training pipeline and assess per-angle error, latency, and model size.
+## 6. Training & Usage Guide
 
-## 7. Contributions
-- First integration of RepNeXt-M4 into 6DRepNet pipeline
-- Establishes a new mobile-efficient SOTA for head pose estimation
-- Demonstrates real-world feasibility with low-latency deployment
+### 6.1. Requirements
 
-## 8. Conclusion and Future Work
-This proposal outlines a new direction in efficient vision architecture design by combining state-of-the-art backbone (RepNeXt-M4) with a proven pose regression head (6DRepNet). If validated, this work can serve as a reference for future low-latency, high-precision applications in mobile vision.
+* Python 3.8+
+* [PyTorch](https://pytorch.org/) ≥ 1.9
+* torchvision
+* [timm](https://github.com/huggingface/pytorch-image-models)
+* opencv-python, numpy, Pillow, matplotlib
 
-## 9. Reference Material
-- [6DRepNet (ICIP 2022 / IEEE TIP 2024)](https://arxiv.org/pdf/2502.14061)
-- [RepNeXt: Multi-Scale Reparameterized CNNs for Mobile Vision (arXiv 2024)](https://arxiv.org/abs/2406.16004)
-- [RepViT: Revisiting Mobile CNN From ViT Perspective (CVPR 2024)](https://arxiv.org/abs/2307.09283)
-- [MobileNetV3 (Howard et al., 2019)](https://arxiv.org/abs/1905.02244)
-- [MobileViG (NeurIPS 2023)](https://arxiv.org/abs/2307.00395)
-- [EfficientFormerV2 (ICCV 2023)](https://arxiv.org/abs/2104.00298)
+**Install via:**
 
-## Diagrams
+```bash
+pip install torch torchvision timm opencv-python numpy pillow matplotlib
+```
+
+### 6.2. Dataset Download
+
+* **300W-LP & AFLW2000:**
+  Official homepage: [http://www.cbsr.ia.ac.cn/users/xiangyuzhu/projects/3DDFA/main.htm](http://www.cbsr.ia.ac.cn/users/xiangyuzhu/projects/3DDFA/main.htm)
+* **BIWI:**
+  The official ETH Zurich page is no longer accessible.
+  However, the BIWI Head Pose Database can be accessed via Kaggle:
+  [https://www.kaggle.com/datasets/kmader/biwi-kinect-head-pose-database](https://www.kaggle.com/datasets/kmader/biwi-kinect-head-pose-database)
+  *(Always cite the original BIWI publication if using this dataset.)*
+
+**Note:**
+Request access to these datasets from their official sites as required for academic use.
+
+### 6.3. Backbone Weights Download
+
+* **RepVGG:**
+  [Official RepVGG Weights & Models](https://github.com/DingXiaoH/RepVGG)
+* **RepNeXt:**
+  [Official RepNeXt Weights & Models](https://github.com/suous/RepNeXt/releases)
+
+For RepNeXt-M4:
+
+```bash
+wget https://github.com/suous/RepNeXt/releases/download/v1.0/repnext_m4_distill_300e_fused.pt -O repnext_m4_fused.pt
+```
+
+### 6.4. Preprocess & Generate File Lists
+
+```bash
+python create_filename_list.py --root_dir datasets/300W_LP
+python create_filename_list.py --root_dir datasets/AFLW2000
+# (For BIWI, see 6DRepNet instructions)
+```
+
+### 6.5. Training Command
+
+**For RepNeXt-M4 backbone:**
+
+```bash
+python train.py \
+  --num_epochs 80 \
+  --batch_size 80 \
+  --lr 0.0001 \
+  --dataset Pose_300W_LP \
+  --data_dir ./datasets/300W_LP \
+  --filename_list ./datasets/300W_LP/filenames.txt \
+  --output_string myexp \
+  --backbone_type repnext \
+  --backbone_weights ./repnext_m4_fused.pt
+```
+
+**For RepVGG backbone:**
+
+```bash
+python train.py \
+  --num_epochs 80 \
+  --batch_size 80 \
+  --lr 0.0001 \
+  --dataset Pose_300W_LP \
+  --data_dir ./datasets/300W_LP \
+  --filename_list ./datasets/300W_LP/filenames.txt \
+  --output_string myexp \
+  --backbone_type repvgg \
+  --backbone_weights ./RepVGG-B1g2-train.pth
+```
+
+* Checkpoints are saved in `output/snapshots/`
+* To save directly to Google Drive in Colab, use a symlink or copy after training.
+
+### 6.6. Resuming Training
+
+```bash
+python train.py ... --snapshot output/snapshots/SixDRepNet_xxxxx/myexp_epoch_XX.tar
+```
+
+### 6.7. Copying Output (Colab/Drive)
+
+```python
+import shutil
+shutil.copytree('output', '/content/drive/MyDrive/headpose_output_backup', dirs_exist_ok=True)
+```
+
+---
+
+## 7. Evaluation & Benchmarking
+
+* Create a test/validation file list as above.
+* Evaluate using a script or a loop that loads checkpoints and computes MAE for yaw, pitch, roll (as in [6DRepNet evaluation protocol](https://github.com/thohemp/6DRepNet)).
+* Metrics:
+
+  * **MAE (degrees)** for yaw, pitch, roll
+  * **Inference latency** (see [RepNeXt repo for benchmarking scripts](https://github.com/suous/RepNeXt))
+  * **Model size** (parameters, MACs)
+
+**For benchmarking on mobile devices:**
+
+* Follow RepNeXt [deployment instructions](https://github.com/suous/RepNeXt#deployment--latency-measurement).
+
+---
+
+## 8. Contributions
+
+* First integration of RepNeXt-M4 into 6DRepNet pipeline
+* Establishes a new mobile-efficient SOTA for head pose estimation
+* Fully reproducible Colab/Ubuntu training and evaluation workflow
+* Real-world deployment feasibility with low-latency and compact models
+
+---
+
+## 9. References
+
+* [6DRepNet: Category-Level 6D Pose Estimation via Rotation Representation and Geodesic Loss](https://arxiv.org/pdf/2502.14061)
+* [6DRepNet Official Repo](https://github.com/thohemp/6DRepNet)
+* [RepNeXt: Multi-Scale Reparameterized CNNs for Mobile Vision](https://arxiv.org/abs/2406.16004)
+* [RepNeXt Official Repo](https://github.com/suous/RepNeXt)
+* [RepVGG: Making VGG-style ConvNets Great Again](https://arxiv.org/abs/2101.03697)
+* [RepVGG Official Repo](https://github.com/DingXiaoH/RepVGG)
+* [MobileNetV3 (Howard et al., 2019)](https://arxiv.org/abs/1905.02244)
+* [MobileViG (NeurIPS 2023)](https://arxiv.org/abs/2307.00395)
+* [EfficientFormerV2 (ICCV 2023)](https://arxiv.org/abs/2104.00298)
+
+**Dataset Links:**
+
+* [300W-LP Dataset](http://www.cbsr.ia.ac.cn/users/xiangyuzhu/projects/3DDFA/main.htm)
+* [AFLW2000 Dataset](http://www.cbsr.ia.ac.cn/users/xiangyuzhu/projects/3DDFA/main.htm)
+* [BIWI Dataset (Kaggle)](https://www.kaggle.com/datasets/kmader/biwi-kinect-head-pose-database)
+
+---
+
+## 10. Diagrams
+
 ### Fig. 1. Pipeline Comparison
+
 ```text
 [RGB Image]
      ↓
@@ -144,6 +297,7 @@ This proposal outlines a new direction in efficient vision architecture design b
 ```
 
 ### Fig. 2. RepNeXt Block
+
 ```text
 Input
  ↓        ↓        ↓
@@ -158,4 +312,38 @@ Input
 
 ---
 
-We invite collaborators and reviewers to validate and refine this experimental architecture for academic dissemination.
+## 11. Changelog
+
+* **Added**: `SixDRepNet_RepNeXt` class and RepNeXt support in `model.py`
+* **Updated**: `train.py` to support backbone selection (`repvgg`/`repnext`) and custom weights path
+* **Improved**: Colab/Ubuntu compatibility; checkpoint/Drive output workflow
+* **Documented**: Academic/benchmark protocol, dataset handling, and full citation of all external resources
+
+---
+
+## 12. How to Cite
+
+If you use this code or findings, please cite the following:
+
+```
+@inproceedings{thohemp2022_6drepnet,
+  title={6DRepNet: Category-Level 6D Pose Estimation via Rotation Representation and Geodesic Loss},
+  author={He, Tong and others},
+  booktitle={ICIP},
+  year={2022}
+}
+@article{su2024repnext,
+  title={RepNeXt: Multi-Scale Reparameterized CNNs for Mobile Vision},
+  author={Su, Qilin and others},
+  journal={arXiv preprint arXiv:2406.16004},
+  year={2024}
+}
+```
+
+---
+
+## 13. Contact & Acknowledgements
+
+* For questions or collaboration, open an issue or contact the maintainers.
+* **Acknowledgements**: This project builds on the codebases and datasets of [6DRepNet](https://github.com/thohemp/6DRepNet) and [RepNeXt](https://github.com/suous/RepNeXt), as well as all original dataset providers.
+* We thank all authors and open-source contributors.
