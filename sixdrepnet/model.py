@@ -6,6 +6,11 @@ from torch import nn
 from backbone.repvgg import get_RepVGG_func_by_name
 import utils
 
+# Import repnext architectures
+from backbone.repnext import repnext_m0, repnext_m1, repnext_m2, repnext_m3, repnext_m4, repnext_m5
+from backbone.repnext_utils import replace_batchnorm
+
+
 class SixDRepNet(nn.Module):
     def __init__(self,
                  backbone_name, backbone_file, deploy,
@@ -110,3 +115,60 @@ class SixDRepNet2(nn.Module):
         out = utils.compute_rotation_matrix_from_ortho6d(x)
 
         return out
+
+
+class SixDRepNet_RepNeXt(nn.Module):
+    """
+    SixDRepNet model using any RepNeXt variant as the backbone.
+
+    - Allows flexible swapping between repnext_m0 ... repnext_m5, or any compatible function.
+    - Uses the RepNeXt output features and adds a global pooling + regression head for 6D pose.
+    - BatchNorm fusion (reparameterization) is supported for efficient deployment.
+    - Optionally loads pre-fused (JIT/scripted) backbone weights if provided.
+    - The output is a rotation matrix computed via the original utils.compute_rotation_matrix_from_ortho6d.
+    """
+
+    def __init__(
+            self,
+            backbone_fn=repnext_m4,  # Function or class constructor for the RepNeXt variant to use
+            pretrained=False,  # If True, load ImageNet-pretrained weights (if available)
+            deploy=False,  # If True, fuse BN layers for inference efficiency
+            backbone_weights_path=None  # Optional: path to a fused backbone (e.g., torch.jit.load)
+    ):
+        super(SixDRepNet_RepNeXt, self).__init__()
+
+        # 1. Instantiate the backbone with num_classes=0 to disable the default classifier head.
+        self.backbone = backbone_fn(pretrained=pretrained, num_classes=0)
+
+        # 2. Optionally fuse batchnorm layers for deployment (makes inference faster).
+        if deploy:
+            replace_batchnorm(self.backbone)
+
+        # 3. Optionally load custom (e.g. JIT-fused or checkpointed) weights for the backbone.
+        if backbone_weights_path is not None:
+            print(f"Loading backbone weights from {backbone_weights_path}")
+            # If using torch.jit.load, get the state dict
+            state_dict = torch.jit.load(backbone_weights_path, map_location="cpu").state_dict()
+            self.backbone.load_state_dict(state_dict, strict=False)
+
+        # 4. Determine output feature dimension of backbone (needed for the regression head)
+        self.fea_dim = getattr(self.backbone, 'num_features', 512)
+
+        # 5. Define pooling and regression layers
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.linear_reg = nn.Linear(self.fea_dim, 6)
+
+    def forward(self, x):
+        """
+        Forward pass:
+        - Extract features using RepNeXt backbone (returns (B, C, H, W))
+        - Apply global average pooling to get (B, C)
+        - Pass through regression head to get 6D pose representation
+        - Convert 6D pose to 3x3 rotation matrix using provided utility
+        """
+        feats = self.backbone.forward_features(x)
+        pooled = self.gap(feats)
+        pooled = torch.flatten(pooled, 1)
+        out6d = self.linear_reg(pooled)
+        rotmat = utils.compute_rotation_matrix_from_ortho6d(out6d)
+        return rotmat

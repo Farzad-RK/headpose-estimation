@@ -65,6 +65,32 @@ Our training protocol itself will adhere to the following specifications:
 *   **Scheduler**: A **Cosine decay** learning rate scheduler will be utilised.
 *   **Augmentations**: To enhance the model's generalisation, standard augmentations such as **flip, color jitter, and Gaussian noise** will be applied during training.
 
+
+## Integration Structure
+
+- `model.py`: Contains all model classes, including `SixDRepNet_RepNeXt`, which wraps a RepNeXt backbone with a pose regression head.
+- `backbone/repnext.py`: Contains RepNeXt model implementations and variant registries (e.g., `repnext_m0` to `repnext_m5`).
+- `backbone/repnext_utils.py`: Minimal utility for batchnorm fusion (`replace_batchnorm`) for deployment/inference speed.
+- `utils.py`: Must provide the function `compute_rotation_matrix_from_ortho6d` for converting 6D representations to SO(3) rotation matrices.
+
+
+### Model Instantiation
+
+**Flexible Backbone Selection:**  
+We can use any RepNeXt variant as a backbone (e.g., `repnext_m0`, `repnext_m1`, ..., `repnext_m5`). Just pass the corresponding constructor function.
+
+```python
+from model import SixDRepNet_RepNeXt
+from repnext import repnext_m3  # Or repnext_m0, ..., repnext_m5
+
+# Example: Use RepNeXt-M3 backbone with ImageNet pretrained weights
+model = SixDRepNet_RepNeXt(
+    backbone_fn=repnext_m3,
+    pretrained=True,
+    deploy=False
+)
+
+```
 ## 4. Hypothesis
 Replacing RepVGG with RepNeXt-M4 will:
 - Improve angular accuracy due to enhanced multi-scale feature representation
