@@ -1,29 +1,18 @@
-import time
-import math
-import re
-import sys
-import os
 import argparse
+import os
 
-import numpy as np
-from numpy.lib.function_base import _quantile_unchecked
 import cv2
+import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.backends import cudnn
-import torch.nn.functional as F
 import torchvision
+from torch.backends import cudnn
+from torch.utils.data import DataLoader
 from torchvision import transforms
-import matplotlib
-from matplotlib import pyplot as plt
-from PIL import Image
-matplotlib.use('TkAgg')
 
-from model import SixDRepNet
+from model import SixDRepNet, SixDRepNet_RepNeXt
+from backbone.repnext import repnext_m4  # Import your RepNeXt backbone
 import utils
 import datasets
-
 
 def parse_args():
     """Parse input arguments."""
@@ -38,7 +27,7 @@ def parse_args():
     parser.add_argument('--filename_list',
                         dest='filename_list',
                         help='Path to text file containing relative paths for every example.',
-                        default='datasets/AFLW2000/files.txt', type=str)  # datasets/BIWI_noTrack.npz
+                        default='datasets/AFLW2000/files.txt', type=str)
     parser.add_argument('--snapshot',
                         dest='snapshot', help='Name of model snapshot.',
                         default='', type=str)
@@ -52,7 +41,11 @@ def parse_args():
                         dest='dataset', help='Dataset type.',
                         default='AFLW2000', type=str)
 
-
+    # ---- ADDED for backbone selection ----
+    parser.add_argument('--backbone_type', type=str, default='repvgg', choices=['repvgg', 'repnext'],
+                        help='Type of backbone to use: repvgg or repnext')
+    parser.add_argument('--backbone_weights', type=str, default='', help='Path to the backbone weights file (.pth for repvgg, .pt for repnext)')
+    # --------------------------------------
     args = parser.parse_args()
     return args
 
@@ -68,10 +61,23 @@ if __name__ == '__main__':
     cudnn.enabled = True
     gpu = args.gpu_id
     snapshot_path = args.snapshot
-    model = SixDRepNet(backbone_name='RepVGG-B1g2',
-                        backbone_file='',
-                        deploy=True,
-                        pretrained=False)
+
+    # ---------------- Model selection ----------------
+    if args.backbone_type == 'repvgg':
+        model = SixDRepNet(backbone_name='RepVGG-B1g2',
+                           backbone_file='',
+                           deploy=True,
+                           pretrained=False)
+    elif args.backbone_type == 'repnext':
+        model = SixDRepNet_RepNeXt(backbone_fn=repnext_m4, pretrained=False, deploy=True)
+        model = model.cuda(gpu)
+        if args.backbone_weights:
+            jit_model = torch.jit.load(args.backbone_weights, map_location=f"cuda:{gpu}")
+            state_dict = jit_model.state_dict()
+            model.backbone.load_state_dict(state_dict, strict=False)
+    else:
+        raise ValueError("Unsupported backbone_type: {}".format(args.backbone_type))
+    # -------------------------------------------------
 
     print('Loading data.')
 
@@ -81,31 +87,28 @@ if __name__ == '__main__':
                                           transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
     pose_dataset = datasets.getDataset(
-        args.dataset, args.data_dir, args.filename_list, transformations, train_mode = False)
+        args.dataset, args.data_dir, args.filename_list, transformations, train_mode=False)
     test_loader = torch.utils.data.DataLoader(
         dataset=pose_dataset,
         batch_size=args.batch_size,
         num_workers=2)
 
-
-    # Load snapshot
+    # Load snapshot (trained model weights)
     saved_state_dict = torch.load(snapshot_path, map_location='cpu')
 
     if 'model_state_dict' in saved_state_dict:
         model.load_state_dict(saved_state_dict['model_state_dict'])
     else:
-        model.load_state_dict(saved_state_dict)    
-    model.cuda(gpu)
+        model.load_state_dict(saved_state_dict)
 
-    # Test the Model
+    model.cuda(gpu)
     model.eval()  # Change model to 'eval' mode (BN uses moving mean/var).
-    
+
     total = 0
     yaw_error = pitch_error = roll_error = .0
     v1_err = v2_err = v3_err = .0
 
     with torch.no_grad():
-
         for i, (images, r_label, cont_labels, name) in enumerate(test_loader):
             images = torch.Tensor(images).cuda(gpu)
             total += cont_labels.size(0)
@@ -145,26 +148,19 @@ if __name__ == '__main__':
                 name = name[0]
                 if args.dataset == 'AFLW2000':
                     cv2_img = cv2.imread(os.path.join(args.data_dir, name + '.jpg'))
-                   
+
                 elif args.dataset == 'BIWI':
                     vis = np.uint8(name)
-                    h,w,c = vis.shape
+                    h, w, c = vis.shape
                     vis2 = cv2.CreateMat(h, w, cv2.CV_32FC3)
                     vis0 = cv2.fromarray(vis)
                     cv2.CvtColor(vis0, vis2, cv2.CV_GRAY2BGR)
                     cv2_img = cv2.imread(vis2)
                 utils.draw_axis(cv2_img, y_pred_deg[0], p_pred_deg[0], r_pred_deg[0], tdx=200, tdy=200, size=100)
-                #utils.plot_pose_cube(cv2_img, y_pred_deg[0], p_pred_deg[0], r_pred_deg[0], size=200)
                 cv2.imshow("Test", cv2_img)
                 cv2.waitKey(5)
-                cv2.imwrite(os.path.join('output/img/',name+'.png'),cv2_img)
-                
+                cv2.imwrite(os.path.join('output/img/', name + '.png'), cv2_img)
+
         print('Yaw: %.4f, Pitch: %.4f, Roll: %.4f, MAE: %.4f' % (
             yaw_error / total, pitch_error / total, roll_error / total,
             (yaw_error + pitch_error + roll_error) / (total * 3)))
-
-        # print('Vec1: %.4f, Vec2: %.4f, Vec3: %.4f, VMAE: %.4f' % (
-        #     v1_err / total, v2_err / total, v3_err / total,
-        #     (v1_err + v2_err + v3_err) / (total * 3)))
-
-
